@@ -5,10 +5,14 @@ import { Label } from './ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Users, Play, Settings } from 'lucide-react';
+import { useToast } from '../hooks/use-toast';
+import gameService from '../services/gameService';
 
 const GameSetup = ({ onStartGame }) => {
   const [players, setPlayers] = useState(['', '', '', '']);
   const [totalRounds, setTotalRounds] = useState('5');
+  const [isCreating, setIsCreating] = useState(false);
+  const { toast } = useToast();
 
   const handlePlayerChange = (index, value) => {
     const newPlayers = [...players];
@@ -16,17 +20,40 @@ const GameSetup = ({ onStartGame }) => {
     setPlayers(newPlayers);
   };
 
-  const handleStartGame = () => {
+  const handleStartGame = async () => {
     const validPlayers = players.filter(name => name.trim() !== '');
     if (validPlayers.length < 2) {
-      alert('Please enter at least 2 player names');
+      toast({
+        title: "Invalid Players",
+        description: "Please enter at least 2 player names",
+        variant: "destructive"
+      });
       return;
     }
     
-    onStartGame({
-      players: validPlayers,
-      totalRounds: parseInt(totalRounds)
-    });
+    setIsCreating(true);
+    
+    try {
+      const game = await gameService.createGame(validPlayers, parseInt(totalRounds));
+      toast({
+        title: "Game Created!",
+        description: `New game started with ${validPlayers.length} players`,
+      });
+      
+      onStartGame({
+        gameId: game.id,
+        players: validPlayers,
+        totalRounds: parseInt(totalRounds)
+      });
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   return (
@@ -84,6 +111,7 @@ const GameSetup = ({ onStartGame }) => {
                     value={player}
                     onChange={(e) => handlePlayerChange(index, e.target.value)}
                     className="transition-all duration-200 focus:scale-[1.02] focus:shadow-md"
+                    disabled={isCreating}
                   />
                 </div>
               ))}
@@ -92,10 +120,11 @@ const GameSetup = ({ onStartGame }) => {
 
           <Button 
             onClick={handleStartGame}
-            className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-300 transform hover:scale-[1.02] hover:shadow-lg"
+            disabled={isCreating}
+            className="w-full bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-300 transform hover:scale-[1.02] hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Play className="w-5 h-5 mr-2" />
-            Start Game
+            {isCreating ? 'Creating Game...' : 'Start Game'}
           </Button>
         </CardContent>
       </Card>

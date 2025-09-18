@@ -13,34 +13,49 @@ import {
   RotateCcw,
   Crown,
   TrendingUp,
-  CheckCircle
+  CheckCircle,
+  Loader2
 } from 'lucide-react';
-import { mockGameData } from '../data/mock';
+import { useToast } from '../hooks/use-toast';
+import gameService from '../services/gameService';
 
 const GameBoard = ({ gameSettings, onNewGame }) => {
-  const [currentRound, setCurrentRound] = useState(1);
   const [gameData, setGameData] = useState(null);
   const [roundInputs, setRoundInputs] = useState({});
   const [gameWinner, setGameWinner] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const { toast } = useToast();
 
   useEffect(() => {
-    // Initialize game data with mock data
-    const initialData = mockGameData.generateGame(gameSettings);
-    setGameData(initialData);
-  }, [gameSettings]);
+    if (gameSettings.gameId) {
+      loadGameData();
+    }
+  }, [gameSettings.gameId]);
 
-  const calculatePoints = (bid, actual) => {
-    if (actual === bid) {
-      return bid;
-    } else if (actual > bid) {
-      return bid + (actual - bid) * 0.1;
-    } else {
-      return -bid;
+  const loadGameData = async () => {
+    try {
+      setIsLoading(true);
+      const data = await gameService.getGame(gameSettings.gameId);
+      setGameData(data);
+      
+      // Check if game is already completed
+      if (data.game.status === 'completed') {
+        setGameWinner(data.game.winner);
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleRoundInputChange = (playerIndex, type, value) => {
-    const key = `${currentRound}-${playerIndex}`;
+    const key = `${gameData.game.current_round}-${playerIndex}`;
     setRoundInputs(prev => ({
       ...prev,
       [key]: {
@@ -50,80 +65,116 @@ const GameBoard = ({ gameSettings, onNewGame }) => {
     }));
   };
 
-  const submitRound = () => {
-    const newGameData = { ...gameData };
-    let instantWinner = null;
-
-    gameSettings.players.forEach((player, playerIndex) => {
-      const key = `${currentRound}-${playerIndex}`;
+  const submitRound = async () => {
+    if (!gameData) return;
+    
+    const currentRound = gameData.game.current_round;
+    const playerData = [];
+    
+    // Prepare player data for submission
+    for (let i = 0; i < gameSettings.players.length; i++) {
+      const key = `${currentRound}-${i}`;
       const input = roundInputs[key];
       
-      if (input && input.bid !== undefined && input.actual !== undefined) {
-        const points = calculatePoints(input.bid, input.actual);
-        
-        // Check for instant win (bid 8 and won 8 or more)
-        if (input.bid === 8 && input.actual >= 8) {
-          instantWinner = player;
-        }
-        
-        if (!newGameData.rounds[currentRound - 1]) {
-          newGameData.rounds[currentRound - 1] = [];
-        }
-        
-        newGameData.rounds[currentRound - 1][playerIndex] = {
-          bid: input.bid,
-          actual: input.actual,
-          points: points
-        };
+      if (!input || input.bid === undefined || input.actual === undefined) {
+        toast({
+          title: "Incomplete Data",
+          description: "Please fill in bid and actual tricks for all players",
+          variant: "destructive"
+        });
+        return;
       }
-    });
+      
+      const points = gameService.calculatePoints(input.bid, input.actual);
+      playerData.push({
+        bid: input.bid,
+        actual: input.actual,
+        points: points
+      });
+    }
 
-    setGameData(newGameData);
+    setIsSubmitting(true);
     
-    if (instantWinner) {
-      setGameWinner(instantWinner);
-    } else if (currentRound >= gameSettings.totalRounds) {
-      // Calculate final winner
-      const finalScores = calculateFinalScores(newGameData);
-      const winner = gameSettings.players[finalScores.indexOf(Math.max(...finalScores))];
-      setGameWinner(winner);
-    } else {
-      setCurrentRound(currentRound + 1);
-      setRoundInputs({});
+    try {
+      const result = await gameService.submitRound(
+        gameSettings.gameId, 
+        currentRound, 
+        playerData
+      );
+      
+      if (result.winner) {
+        setGameWinner(result.winner);
+        toast({
+          title: "Game Over!",
+          description: `${result.winner} wins with instant victory!`,
+        });
+      } else {
+        toast({
+          title: "Round Submitted",
+          description: `Round ${currentRound} completed successfully`,
+        });
+        
+        // Reload game data to get updated state
+        await loadGameData();
+        setRoundInputs({});
+      }
+    } catch (error) {
+      toast({
+        title: "Error",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
-  const calculateFinalScores = (data) => {
-    return gameSettings.players.map((player, playerIndex) => {
-      let totalScore = 0;
-      data.rounds.forEach(round => {
-        if (round && round[playerIndex]) {
-          totalScore += round[playerIndex].points;
-        }
-      });
-      return totalScore;
-    });
-  };
-
   const getCurrentRoundInputs = () => {
+    if (!gameData) return [];
+    
     return gameSettings.players.map((player, playerIndex) => {
-      const key = `${currentRound}-${playerIndex}`;
+      const key = `${gameData.game.current_round}-${playerIndex}`;
       return roundInputs[key] || { bid: '', actual: '' };
     });
   };
 
   const isRoundComplete = () => {
+    if (!gameData) return false;
+    
     return gameSettings.players.every((player, playerIndex) => {
-      const key = `${currentRound}-${playerIndex}`;
+      const key = `${gameData.game.current_round}-${playerIndex}`;
       const input = roundInputs[key];
       return input && input.bid !== undefined && input.actual !== undefined && input.bid >= 1 && input.actual >= 0;
     });
   };
 
-  if (!gameData) return <div>Loading...</div>;
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+        <Card className="w-full max-w-md shadow-2xl border-0 bg-white/90 backdrop-blur-sm">
+          <CardContent className="flex flex-col items-center justify-center p-8">
+            <Loader2 className="w-8 h-8 animate-spin text-blue-600 mb-4" />
+            <p className="text-gray-600">Loading game data...</p>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  if (!gameData) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-red-50 to-pink-100 flex items-center justify-center">
+        <Card className="w-full max-w-md shadow-2xl border-0 bg-white/90 backdrop-blur-sm">
+          <CardContent className="flex flex-col items-center justify-center p-8">
+            <p className="text-gray-600 mb-4">Failed to load game data</p>
+            <Button onClick={onNewGame}>Start New Game</Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   if (gameWinner) {
-    const finalScores = calculateFinalScores(gameData);
     return (
       <div className="min-h-screen bg-gradient-to-br from-yellow-50 to-orange-100 flex items-center justify-center p-4">
         <Card className="w-full max-w-3xl shadow-2xl border-0 bg-white/90 backdrop-blur-sm">
@@ -151,7 +202,9 @@ const GameBoard = ({ gameSettings, onNewGame }) => {
                     }`}
                   >
                     <span className="font-medium text-gray-700">{player}</span>
-                    <span className="text-xl font-bold text-gray-800">{finalScores[index].toFixed(1)}</span>
+                    <span className="text-xl font-bold text-gray-800">
+                      {gameData.current_scores[index].toFixed(1)}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -185,7 +238,9 @@ const GameBoard = ({ gameSettings, onNewGame }) => {
                 </div>
                 <div>
                   <CardTitle className="text-2xl font-bold text-gray-800">Call Break Game</CardTitle>
-                  <p className="text-gray-600">Round {currentRound} of {gameSettings.totalRounds}</p>
+                  <p className="text-gray-600">
+                    Round {gameData.game.current_round} of {gameSettings.totalRounds}
+                  </p>
                 </div>
               </div>
               <Badge variant="outline" className="text-lg px-4 py-2">
@@ -201,7 +256,7 @@ const GameBoard = ({ gameSettings, onNewGame }) => {
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-xl">
                 <Hash className="w-5 h-5 text-blue-600" />
-                Round {currentRound} Input
+                Round {gameData.game.current_round} Input
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -220,6 +275,7 @@ const GameBoard = ({ gameSettings, onNewGame }) => {
                           value={currentInputs[playerIndex].bid}
                           onChange={(e) => handleRoundInputChange(playerIndex, 'bid', e.target.value)}
                           className="text-center font-semibold"
+                          disabled={isSubmitting}
                         />
                       </div>
                       <div>
@@ -232,6 +288,7 @@ const GameBoard = ({ gameSettings, onNewGame }) => {
                           value={currentInputs[playerIndex].actual}
                           onChange={(e) => handleRoundInputChange(playerIndex, 'actual', e.target.value)}
                           className="text-center font-semibold"
+                          disabled={isSubmitting}
                         />
                       </div>
                     </div>
@@ -239,7 +296,7 @@ const GameBoard = ({ gameSettings, onNewGame }) => {
                       <div className="mt-3 p-2 bg-blue-100 rounded text-center">
                         <span className="text-sm text-gray-600">Points: </span>
                         <span className="font-bold text-blue-700">
-                          {calculatePoints(
+                          {gameService.calculatePoints(
                             parseInt(currentInputs[playerIndex].bid),
                             parseInt(currentInputs[playerIndex].actual)
                           ).toFixed(1)}
@@ -251,10 +308,15 @@ const GameBoard = ({ gameSettings, onNewGame }) => {
                 
                 <Button 
                   onClick={submitRound}
-                  disabled={!isRoundComplete()}
-                  className="w-full bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-300"
+                  disabled={!isRoundComplete() || isSubmitting}
+                  className="w-full bg-gradient-to-r from-blue-500 to-indigo-600 hover:from-blue-600 hover:to-indigo-700 text-white font-semibold py-3 px-6 rounded-lg transition-all duration-300 disabled:opacity-50"
                 >
-                  {currentRound >= gameSettings.totalRounds ? (
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                      Submitting...
+                    </>
+                  ) : gameData.game.current_round >= gameSettings.totalRounds ? (
                     <>
                       <Trophy className="w-5 h-5 mr-2" />
                       Finish Game
@@ -281,12 +343,7 @@ const GameBoard = ({ gameSettings, onNewGame }) => {
             <CardContent>
               <div className="space-y-4">
                 {gameSettings.players.map((player, playerIndex) => {
-                  let totalScore = 0;
-                  gameData.rounds.forEach(round => {
-                    if (round && round[playerIndex]) {
-                      totalScore += round[playerIndex].points;
-                    }
-                  });
+                  const totalScore = gameData.current_scores[playerIndex];
                   
                   return (
                     <div key={playerIndex} className="p-4 border rounded-lg bg-gradient-to-r from-gray-50 to-gray-100">
@@ -297,21 +354,23 @@ const GameBoard = ({ gameSettings, onNewGame }) => {
                       
                       <div className="mt-3 grid grid-cols-5 gap-2 text-sm">
                         {Array.from({ length: gameSettings.totalRounds }, (_, roundIndex) => {
-                          const roundData = gameData.rounds[roundIndex] && gameData.rounds[roundIndex][playerIndex];
+                          const roundData = gameData.rounds.find(r => r.round_number === roundIndex + 1);
+                          const playerRoundData = roundData?.player_data[playerIndex];
+                          
                           return (
                             <div 
                               key={roundIndex} 
                               className={`text-center p-2 rounded ${
-                                roundData 
+                                playerRoundData 
                                   ? 'bg-green-100 text-green-800' 
-                                  : roundIndex + 1 === currentRound 
+                                  : roundIndex + 1 === gameData.game.current_round 
                                     ? 'bg-blue-100 text-blue-800' 
                                     : 'bg-gray-200 text-gray-500'
                               }`}
                             >
                               <div className="font-semibold">R{roundIndex + 1}</div>
                               <div className="text-xs">
-                                {roundData ? `${roundData.points.toFixed(1)}` : '-'}
+                                {playerRoundData ? `${playerRoundData.points.toFixed(1)}` : '-'}
                               </div>
                             </div>
                           );
